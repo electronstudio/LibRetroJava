@@ -12,6 +12,13 @@ static uint32_t *frame_buf;
 static struct retro_log_callback logging;
 static retro_log_printf_t log_cb;
 
+static retro_video_refresh_t video_cb;
+static retro_audio_sample_t audio_cb;
+static retro_audio_sample_batch_t audio_batch_cb;
+static retro_environment_t environ_cb;
+static retro_input_poll_t input_poll_cb;
+static retro_input_state_t input_state_cb;
+
 static void fallback_log(enum retro_log_level level, const char *fmt, ...) {
     (void) level;
     va_list va;
@@ -19,13 +26,13 @@ static void fallback_log(enum retro_log_level level, const char *fmt, ...) {
     vfprintf(stderr, fmt, va);
     va_end(va);
 }
+JavaVM *vm;
+JNIEnv *env;
+JavaVMInitArgs vm_args;
+jint res;
+jclass cls;
+bool java_init(const char* path) {
 
-int java(const char* path) {
-    JavaVM *vm;
-    JNIEnv *env;
-    JavaVMInitArgs vm_args;
-    jint res;
-    jclass cls;
     jmethodID mid;
     jstring jstr;
     jobjectArray main_args;
@@ -52,24 +59,42 @@ int java(const char* path) {
     res = JNI_CreateJavaVM(&vm, (void **) &env, &vm_args);
     if (res != JNI_OK) {
         printf("Failed to create Java VM\n");
-        return 1;
+        return false;
     }
 
     cls = (*env)->FindClass(env, "LibRetro");
     if (cls == NULL) {
         printf("Failed to find Main class\n");
-        return 1;
+        return false;
     }
-    printf("create Java VMn");
+    printf("create Java VM\n");
     mid = (*env)->GetStaticMethodID(env, cls, "main", "([Ljava/lang/String;)V");
     if (mid == NULL) {
         printf("Failed to find main function\n");
-        return 1;
+        return false;
     }
 
     jstr = (*env)->NewStringUTF(env, "");
     main_args = (*env)->NewObjectArray(env, 1, (*env)->FindClass(env, "java/lang/String"), jstr);
     (*env)->CallStaticVoidMethod(env, cls, mid, main_args);
+
+    return true;
+}
+
+int java_render(uint32_t *buf ) {
+    jmethodID mid;
+    jstring jstr;
+    jobjectArray main_args;
+
+    mid = (*env)->GetStaticMethodID(env, cls, "render", "(Ljava/nio/ByteBuffer;)V");
+    if (mid == NULL) {
+        printf("Failed to find render function\n");
+        return 1;
+    }
+
+    jstr = (*env)->NewStringUTF(env, "");
+    jobject direct_buffer = (*env)->NewDirectByteBuffer(env, buf, sizeof(uint32_t)*320*240);
+    (*env)->CallStaticVoidMethod(env, cls, mid, direct_buffer);
 
     return 0;
 }
@@ -95,18 +120,13 @@ void retro_set_controller_port_device(unsigned port, unsigned device) {
 
 void retro_get_system_info(struct retro_system_info *info) {
     memset(info, 0, sizeof(*info));
-    info->library_name = "TestCore";
+    info->library_name = "LibRetroJava";
     info->library_version = "v1";
     info->need_fullpath = true;
     info->valid_extensions = NULL; // Anything is fine, we don't care.
 }
 
-static retro_video_refresh_t video_cb;
-static retro_audio_sample_t audio_cb;
-static retro_audio_sample_batch_t audio_batch_cb;
-static retro_environment_t environ_cb;
-static retro_input_poll_t input_poll_cb;
-static retro_input_state_t input_state_cb;
+
 
 void retro_get_system_av_info(struct retro_system_av_info *info) {
     float aspect = 4.0f / 3.0f;
@@ -188,29 +208,34 @@ static void render_checkered(void) {
     if (environ_cb(RETRO_ENVIRONMENT_GET_CURRENT_SOFTWARE_FRAMEBUFFER, &fb) &&
         fb.format == RETRO_PIXEL_FORMAT_XRGB8888) {
         buf = fb.data;
-        stride = fb.pitch >> 2;
+        stride = fb.pitch / 4;
     } else {
         buf = frame_buf;
         stride = 320;
     }
 
-    uint32_t color_r = 0xff << 16;
-    uint32_t color_g = 0xff << 8;
 
-    uint32_t *line = buf;
-    for (unsigned y = 0; y < 240; y++, line += stride) {
-        unsigned index_y = ((y - y_coord) >> 4) & 1;
-        for (unsigned x = 0; x < 320; x++) {
-            unsigned index_x = ((x - x_coord) >> 4) & 1;
-            line[x] = (index_y ^ index_x) ? color_r : color_g;
-        }
-    }
+//    uint32_t color_r = 0xff << 16;
+//    uint32_t color_g = 0xff << 8;
+//
+//    uint32_t *line = buf;
+//    for (unsigned y = 0; y < 240; y++, line += stride) {
+//        unsigned index_y = ((y - y_coord) >> 4) & 1;
+//        for (unsigned x = 0; x < 320; x++) {
+//            unsigned index_x = ((x - x_coord) >> 4) & 1;
+//            line[x] = (index_y ^ index_x) ? color_r : color_g;
+//        }
+//    }
+//
+//    for (unsigned y = mouse_rel_y - 5; y <= mouse_rel_y + 5; y++)
+//        for (unsigned x = mouse_rel_x - 5; x <= mouse_rel_x + 5; x++)
+//            buf[y * stride + x] = 0xff;
 
-    for (unsigned y = mouse_rel_y - 5; y <= mouse_rel_y + 5; y++)
-        for (unsigned x = mouse_rel_x - 5; x <= mouse_rel_x + 5; x++)
-            buf[y * stride + x] = 0xff;
+    buf[3000] = 0xff;
 
-    video_cb(buf, 320, 240, stride << 2);
+    java_render(buf);
+
+    video_cb(buf, 320, 240, stride * 4);
 }
 
 static void check_variables(void) {
@@ -240,11 +265,9 @@ bool retro_load_game(const struct retro_game_info *info) {
     }
 
     check_variables();
-
-    java(info->path);
-
     (void) info;
-    return true;
+
+    return java_init(info->path);
 }
 
 void retro_unload_game(void) {
