@@ -136,7 +136,7 @@ endif
 	$(CC) $(CFLAGS) $(fpic) -c -o $@ $<
 
 clean:
-	rm -f $(OBJECTS) $(TARGET)
+	rm -f $(OBJECTS) $(TARGET) *.class
 
 .PHONY: clean
 

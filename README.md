@@ -15,8 +15,7 @@ Compile C:
 
 Compile Java:
 
-    javac LibRetro.java
-    jar cf Test.jar LibRetro.class
+    javac java/src/LibRetro.java -d . && jar cf Test.jar *.class
 
 Run:
 

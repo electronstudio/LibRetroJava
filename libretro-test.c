@@ -8,9 +8,12 @@
 
 #include "libretro.h"
 
+static int WIDTH;
+static int HEIGHT;
+
 static uint32_t *frame_buf;
 static struct retro_log_callback logging;
-static retro_log_printf_t log_cb;
+
 
 static retro_video_refresh_t video_cb;
 static retro_audio_sample_t audio_cb;
@@ -26,22 +29,24 @@ static void fallback_log(enum retro_log_level level, const char *fmt, ...) {
     vfprintf(stderr, fmt, va);
     va_end(va);
 }
+static retro_log_printf_t log_cb = fallback_log;
 JavaVM *vm;
 JNIEnv *env;
 JavaVMInitArgs vm_args;
 jint res;
 jclass cls;
+
 bool java_init(const char* path) {
 
     jmethodID mid;
     jstring jstr;
     jobjectArray main_args;
 
-    JavaVMOption options[1];
+    JavaVMOption options[3];
     //strcpy(options[0], "blah");
 
     vm_args.version = JNI_VERSION_1_8;
-    vm_args.nOptions = 1;
+    vm_args.nOptions = 3;
 
    char str1[] = "-Djava.class.path=";
    // char *optionString = strcat(dest,path);
@@ -54,6 +59,8 @@ bool java_init(const char* path) {
 
 
     options[0].optionString = optionString;
+    options[1].optionString ="-XX:+UnlockExperimentalVMOptions";
+    options[2].optionString ="-XX:+UseEpsilonGC";
 
     vm_args.options = options;
     res = JNI_CreateJavaVM(&vm, (void **) &env, &vm_args);
@@ -93,14 +100,15 @@ int java_render(uint32_t *buf ) {
     }
 
     jstr = (*env)->NewStringUTF(env, "");
-    jobject direct_buffer = (*env)->NewDirectByteBuffer(env, buf, sizeof(uint32_t)*320*240);
+    jobject direct_buffer = (*env)->NewDirectByteBuffer(env, buf, sizeof(uint32_t)*WIDTH*HEIGHT);
     (*env)->CallStaticVoidMethod(env, cls, mid, direct_buffer);
 
     return 0;
 }
 
 void retro_init(void) {
-    frame_buf = calloc(320 * 240, sizeof(uint32_t));
+    log_cb(RETRO_LOG_INFO, "retro_init\n");
+    frame_buf = calloc(WIDTH * HEIGHT, sizeof(uint32_t));
 
 
 }
@@ -119,6 +127,7 @@ void retro_set_controller_port_device(unsigned port, unsigned device) {
 }
 
 void retro_get_system_info(struct retro_system_info *info) {
+    log_cb(RETRO_LOG_INFO, "retro_get_system_info\n");
     memset(info, 0, sizeof(*info));
     info->library_name = "LibRetroJava";
     info->library_version = "v1";
@@ -129,24 +138,29 @@ void retro_get_system_info(struct retro_system_info *info) {
 
 
 void retro_get_system_av_info(struct retro_system_av_info *info) {
-    float aspect = 4.0f / 3.0f;
+    log_cb(RETRO_LOG_INFO, "retro_get_system_av_info");
+    float aspect = 0; //4.0f / 3.0f;
 
     info->timing = (struct retro_system_timing) {
-            .fps = 60.0,
-            .sample_rate = 0.0,
+            .fps = 60.0f,
+            .sample_rate = 44000.0f,
     };
 
     info->geometry = (struct retro_game_geometry) {
-            .base_width   = 320,
-            .base_height  = 240,
-            .max_width    = 320,
-            .max_height   = 240,
+            .base_width   = WIDTH,
+            .base_height  = HEIGHT,
+            .max_width    = WIDTH,
+            .max_height   = HEIGHT,
             .aspect_ratio = aspect,
     };
 
 }
 
 void retro_set_environment(retro_environment_t cb) {
+    log_cb(RETRO_LOG_INFO, "retro_set_environment\n");
+    WIDTH = 320;
+    HEIGHT = 240;
+
     environ_cb = cb;
 
     bool no_content = false;
@@ -155,8 +169,7 @@ void retro_set_environment(retro_environment_t cb) {
 
     if (cb(RETRO_ENVIRONMENT_GET_LOG_INTERFACE, &logging))
         log_cb = logging.log;
-    else
-        log_cb = fallback_log;
+
 }
 
 void retro_set_audio_sample(retro_audio_sample_t cb) {
@@ -185,6 +198,7 @@ static int mouse_rel_x;
 static int mouse_rel_y;
 
 void retro_reset(void) {
+    log_cb(RETRO_LOG_INFO, "retro_reset\n");
     x_coord = 0;
     y_coord = 0;
 }
@@ -202,8 +216,8 @@ static void render_checkered(void) {
     uint32_t *buf = NULL;
     unsigned stride = 0;
     struct retro_framebuffer fb = {0};
-    fb.width = 320;
-    fb.height = 240;
+    fb.width = WIDTH;
+    fb.height = HEIGHT;
     fb.access_flags = RETRO_MEMORY_ACCESS_WRITE;
     if (environ_cb(RETRO_ENVIRONMENT_GET_CURRENT_SOFTWARE_FRAMEBUFFER, &fb) &&
         fb.format == RETRO_PIXEL_FORMAT_XRGB8888) {
@@ -211,7 +225,7 @@ static void render_checkered(void) {
         stride = fb.pitch / 4;
     } else {
         buf = frame_buf;
-        stride = 320;
+        stride = WIDTH;
     }
 
 
@@ -219,9 +233,9 @@ static void render_checkered(void) {
 //    uint32_t color_g = 0xff << 8;
 //
 //    uint32_t *line = buf;
-//    for (unsigned y = 0; y < 240; y++, line += stride) {
+//    for (unsigned y = 0; y < HEIGHT; y++, line += stride) {
 //        unsigned index_y = ((y - y_coord) >> 4) & 1;
-//        for (unsigned x = 0; x < 320; x++) {
+//        for (unsigned x = 0; x < WIDTH; x++) {
 //            unsigned index_x = ((x - x_coord) >> 4) & 1;
 //            line[x] = (index_y ^ index_x) ? color_r : color_g;
 //        }
@@ -235,7 +249,7 @@ static void render_checkered(void) {
 
     java_render(buf);
 
-    video_cb(buf, 320, 240, stride * 4);
+    video_cb(buf, WIDTH, HEIGHT, stride * 4);
 }
 
 static void check_variables(void) {
@@ -257,6 +271,7 @@ void retro_run(void) {
 
 
 bool retro_load_game(const struct retro_game_info *info) {
+    log_cb(RETRO_LOG_INFO, "retro_load_game\n");
     log_cb(RETRO_LOG_INFO, "game path: %s\n", info->path);
     enum retro_pixel_format fmt = RETRO_PIXEL_FORMAT_XRGB8888;
     if (!environ_cb(RETRO_ENVIRONMENT_SET_PIXEL_FORMAT, &fmt)) {
@@ -271,6 +286,7 @@ bool retro_load_game(const struct retro_game_info *info) {
 }
 
 void retro_unload_game(void) {
+    log_cb(RETRO_LOG_INFO, "retro_unload_game\n");
 }
 
 unsigned retro_get_region(void) {
@@ -290,6 +306,7 @@ size_t retro_serialize_size(void) {
 }
 
 bool retro_serialize(void *data_, size_t size) {
+    log_cb(RETRO_LOG_INFO, "retro_serialize\n");
     if (size < 2)
         return false;
 
@@ -300,6 +317,7 @@ bool retro_serialize(void *data_, size_t size) {
 }
 
 bool retro_unserialize(const void *data_, size_t size) {
+    log_cb(RETRO_LOG_INFO, "retro_unserialize\n");
     if (size < 2)
         return false;
 
